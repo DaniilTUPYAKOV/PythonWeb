@@ -1,158 +1,149 @@
 from typing import Callable, Awaitable, Any
 from math import factorial
 import json
+from urllib.parse import parse_qs
 
-def get_fibonacci(n: int, send: Callable[[dict[str, Any]], Awaitable[None]]) -> int:
+
+async def answer(
+    send: Callable[[dict[str, Any]], Awaitable[None]],
+    status_code: int = 400,
+    answer_body: bytes = b"Bad Request",
+):
     """
-    Get the nth number in the Fibonacci sequence
+    Send an HTTP response with the given status code and body.
 
     Args:
-        n: A positive integer
+        send: The async function to send the response
+        status_code: The HTTP status code to send (default 400)
+        answer_body: The response body to send (default b"Bad Request")
 
     Returns:
-        int: The nth Fibonacci number
+        None
     """
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status_code,
+            "headers": [
+                [b"content-type", b"text/plain"],
+            ],
+        }
+    )
+    await send(
+        {
+            "type": "http.response.body",
+            "body": answer_body,
+        }
+    )
+
+
+async def get_fibonacci(
+    path: str, send: Callable[[dict[str, Any]], Awaitable[None]]
+) -> None:
+    """
+    Send response with the nth fibonacci number if the request is correct,
+    otherwise send a 422 (Unprocessable Entity)
+
+    Args:
+        path: The requested URL path,
+        send: The async function to send the response
+
+    Returns:
+        None
+    """
+    try:
+        n = int(path.split("/")[-1])
+    except ValueError:
+        await answer(send, 422, b"Unprocessable Entity")
+        return
+
+    if n < 0:
+        await answer(send, 400, b"Invalid value for n. n must be non-negative.")
+        return
 
     a, b = 0, 1
     for _ in range(n):
         a, b = b, a + b
-    return send(
-        {
-            "type": "http.response.body",
-            "body": bytes(f"{b}", "utf-8"),
-        }
+    await answer(send, 200, bytes(str(b), "utf-8"))
+
+
+async def get_mean(
+    send: Callable[[dict[str, Any]], Awaitable[None]],
+    receive: Callable[[], Awaitable[dict[str, Any]]],
+) -> float:
+    """
+    A function that receives a list of numbers from the client, and
+    sends the mean of the list back to the client.
+
+    If the list is empty, it sends a 400 (Bad Request) response.
+    """
+    received_list = []
+    more_data = True
+    while more_data:
+        message = await receive()
+        if message["type"] == "http.request":
+            body = message["body"]
+            received_list += json.loads(body)
+            more_data = message["more_body"]
+
+    if len(received_list) == 0:
+        await answer(send, 400, b"Bad Request")
+        return
+
+    await answer(
+        send, 200, bytes(str(sum(received_list) / len(received_list)), "utf-8")
     )
 
-def get_mean(numbers: list[float]) -> float:
+
+async def get_factorial(
+    query: str, send: Callable[[dict[str, Any]], Awaitable[None]]
+) -> int:
     """
-    Get the mean of a list of float numbers
+    A function that gets a query string, parses it, and responds with the factorial
+    of the value of the "n" key in the query string.
+    If the value of the "n" key is not a number, or is negative, it returns an
+    appropriate HTTP error.
+    """
+    query_args = parse_qs(query)
+    if "n" in query_args:
+        try:
+            n = int(query_args["n"])
+        except ValueError:
+            await answer(send, 422, b"Unprocessable Entity")
+            return
+
+        if n < 0:
+            await answer(send, 400, b"Invalid value for n. n must be non-negative.")
+            return
+
+        await answer(send, 200, bytes(str(factorial(n)), "utf-8"))
+
+
+async def application(
+    scope: dict,
+    receive: Callable[[], Awaitable[dict[str, Any]]],
+    send: Callable[[dict[str, Any]], Awaitable[None]],
+) -> None:
+    """
+    The main application function that routes to the proper function based on
+    the URL path.
 
     Args:
-        numbers: A list of float numbers
+        scope: The scope of the request.
+        receive: The function to receive the request body.
+        send: The function to send the response.
 
     Returns:
-        float: The mean of the numbers
+        None
     """
-
-    return sum(numbers) / len(numbers)
-
-def get_factorial(n: int, send: Callable[[dict[str, Any]], Awaitable[None]]) -> int:
-    """
-    Get the factorial of a number
-
-    Args:
-        n: A positive integer
-
-    Returns:
-        int: The factorial of the number
-    """
-
-    return send(
-        {
-            "type": "http.response.body",
-            "body": bytes(f"{factorial(n)}", "utf-8"),
-        }
-    )
-
-async def application(scope, receive, send):
     assert scope["type"] == "http"
     path = scope["path"]
 
     if path.startswith("/fibonacci"):
-        n = int(path.split("/")[-1])
-        if n < 0:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 400,
-                    "headers": [
-                        [b"content-type", b"text/plain"],
-                    ],
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"Invalid value for n. n must be non-negative.",
-                }
-            )
-        else:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [
-                        [b"content-type", b"text/plain"],
-                    ],
-                }
-            )
-            await get_fibonacci(n, send)
+        await get_fibonacci(path, send)
     elif path == "/mean":
-        await send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [
-                        [b"content-type", b"text/plain"],
-                    ],
-                }
-            )
-        message = await receive()
-        if message["type"] == "http.request.body":
-            body = message["body"]
-            list_data = json.loads(body)
-            print(body)
-            print(list_data)
-            
-            # await send(
-            #     {
-            #         "type": "http.response.body",
-            #         "body": b"The mean is the average of a set of numbers.",
-            #     }
-            # )
+        await get_mean(send, receive)
     elif path == "/factorial":
-        query_string = scope["query_string"]
-        n = int(query_string)
-        if n < 0:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 400,
-                    "headers": [
-                        [b"content-type", b"text/plain"],
-                    ],
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"Invalid value for n. n must be non-negative.",
-                }
-            )
-        else:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [
-                        [b"content-type", b"text/plain"],
-                    ],
-                }
-            )
-            await get_factorial(n, send)
+        await get_factorial(scope["query_string"], send)
     else:
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 404,
-                "headers": [
-                    [b"content-type", b"text/plain"],
-                ],
-            }
-        )
-        await send(
-            {
-                "type": "http.response.body",
-                "body": b"Not Found",
-            }
-        )
+        await answer(send)
