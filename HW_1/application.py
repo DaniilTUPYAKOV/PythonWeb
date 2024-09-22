@@ -6,8 +6,9 @@ from urllib.parse import parse_qs
 
 async def answer(
     send: Callable[[dict[str, Any]], Awaitable[None]],
-    status_code: int = 400,
-    answer_body: bytes = b"Bad Request",
+    status_code: int = 404,
+    answer_body: bytes = b"Not Found",
+    content_type: bytes = b"text/plain",
 ):
     """
     Send an HTTP response with the given status code and body.
@@ -16,6 +17,7 @@ async def answer(
         send: The async function to send the response
         status_code: The HTTP status code to send (default 400)
         answer_body: The response body to send (default b"Bad Request")
+        content_type: The content type of the response
 
     Returns:
         None
@@ -25,7 +27,7 @@ async def answer(
             "type": "http.response.start",
             "status": status_code,
             "headers": [
-                [b"content-type", b"text/plain"],
+                [b"content-type", content_type],
             ],
         }
     )
@@ -64,7 +66,9 @@ async def get_fibonacci(
     a, b = 0, 1
     for _ in range(n):
         a, b = b, a + b
-    await answer(send, 200, bytes(str(b), "utf-8"))
+    await answer(
+        send, 200, json.dumps({"result": a}).encode("utf-8"), b"application/json"
+    )
 
 
 async def get_mean(
@@ -83,6 +87,9 @@ async def get_mean(
         message = await receive()
         if message["type"] == "http.request":
             body = message["body"]
+            if body == b"":
+                await answer(send, 422, b"Unprocessable Entity")
+                return
             received_list += json.loads(body)
             more_data = message["more_body"]
 
@@ -91,7 +98,10 @@ async def get_mean(
         return
 
     await answer(
-        send, 200, bytes(str(sum(received_list) / len(received_list)), "utf-8")
+        send,
+        200,
+        json.dumps({"result": sum(received_list) / len(received_list)}).encode("utf-8"),
+        b"application/json",
     )
 
 
@@ -105,9 +115,9 @@ async def get_factorial(
     appropriate HTTP error.
     """
     query_args = parse_qs(query)
-    if "n" in query_args:
+    if b"n" in query_args:
         try:
-            n = int(query_args["n"])
+            n = int(query_args[b"n"][0])
         except ValueError:
             await answer(send, 422, b"Unprocessable Entity")
             return
@@ -116,7 +126,14 @@ async def get_factorial(
             await answer(send, 400, b"Invalid value for n. n must be non-negative.")
             return
 
-        await answer(send, 200, bytes(str(factorial(n)), "utf-8"))
+        await answer(
+            send,
+            200,
+            json.dumps({"result": factorial(n)}).encode("utf-8"),
+            b"application/json",
+        )
+        return
+    await answer(send, 422, b"Unprocessable Entity")
 
 
 async def application(
